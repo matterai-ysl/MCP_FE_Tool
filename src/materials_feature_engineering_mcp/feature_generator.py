@@ -23,6 +23,8 @@ from matminer.featurizers.composition import ElementProperty, Stoichiometry, Val
 from pymatgen.core import Composition
 MATMINER_AVAILABLE = True
 
+# Import safe data loading function
+from .utils import _load_data_safe
 
 warnings.filterwarnings('ignore')
 
@@ -55,60 +57,23 @@ class MaterialsFeatureGenerator:
         Returns:
             加载的DataFrame
         """
-        # 根据路径（含URL）推断扩展名；无法推断时尝试CSV/Excel加载
-        parsed_path = urlparse(data_path).path.lower()
-        is_url = data_path.startswith(('http://', 'https://'))
-        
+        # 使用安全加载函数处理URL和本地文件
         try:
+            local_path = _load_data_safe(data_path)
+
+            # 根据文件扩展名判断格式
+            parsed_path = urlparse(local_path).path.lower()
             if parsed_path.endswith('.csv'):
-                if is_url:
-                    # 为URL添加超时和错误处理
-                    import urllib.request
-                    import urllib.error
-                    import io
-                    print("📥 正在从URL下载数据...")
-                    req = urllib.request.Request(data_path, headers={'User-Agent': 'Mozilla/5.0'})
-                    with urllib.request.urlopen(req, timeout=30) as response:
-                        content = response.read()
-                    self.data = pd.read_csv(io.BytesIO(content))
-                else:
-                    self.data = pd.read_csv(data_path)
+                self.data = pd.read_csv(local_path)
             elif parsed_path.endswith(('.xlsx', '.xls')):
-                if is_url:
-                    import urllib.request
-                    import urllib.error
-                    import io
-                    print("📥 正在从URL下载数据...")
-                    req = urllib.request.Request(data_path, headers={'User-Agent': 'Mozilla/5.0'})
-                    with urllib.request.urlopen(req, timeout=30) as response:
-                        content = response.read()
-                    self.data = pd.read_excel(io.BytesIO(content))
-                else:
-                    self.data = pd.read_excel(data_path)
+                self.data = pd.read_excel(local_path)
             else:
                 # 未能从扩展名判断，先尝试CSV，再回退到Excel
-                if is_url:
-                    import urllib.request
-                    import urllib.error
-                    import io
-                    print("📥 正在从URL下载数据（尝试CSV格式）...")
-                    req = urllib.request.Request(data_path, headers={'User-Agent': 'Mozilla/5.0'})
-                    with urllib.request.urlopen(req, timeout=30) as response:
-                        content = response.read()
-                    try:
-                        self.data = pd.read_csv(io.BytesIO(content))
-                    except Exception:
-                        self.data = pd.read_excel(io.BytesIO(content))
-                else:
-                    try:
-                        self.data = pd.read_csv(data_path)
-                    except Exception:
-                        self.data = pd.read_excel(data_path)
-        except urllib.error.URLError as e:  # type: ignore
-            raise ValueError(f"URL加载失败: {str(e)}. 请检查URL是否可访问")
+                try:
+                    self.data = pd.read_csv(local_path)
+                except Exception:
+                    self.data = pd.read_excel(local_path)
         except Exception as e:
-            if "timed out" in str(e).lower():
-                raise ValueError(f"URL加载超时（30秒），请检查网络连接或尝试本地文件")
             raise ValueError(f"不支持的文件格式或无法解析，建议使用CSV或Excel文件。详细错误: {e}")
 
         print(f"✓ 已加载数据: {self.data.shape}")
@@ -281,8 +246,12 @@ class MaterialsFeatureGenerator:
         if output_path:
             enhanced_data.to_csv(output_path, index=False)
             print(f"增强数据集已保存到: {output_path}")
-            report_path = output_path.replace('.csv', '_feature_report.txt')
-            self._generate_feature_report(enhanced_data, report_path)
+            # 生成文本报告
+            txt_report_path = output_path.replace('.csv', '_feature_report.txt')
+            self._generate_feature_report(enhanced_data, txt_report_path)
+            # 生成HTML报告
+            html_report_path = output_path.replace('.csv', '_feature_report.html')
+            self._generate_html_feature_report(enhanced_data, html_report_path)
 
         return enhanced_data
 
@@ -314,3 +283,388 @@ class MaterialsFeatureGenerator:
                     f.write(f"- {col}\n")
 
         print(f"特征报告已保存到: {report_path}")
+
+    def _generate_html_feature_report(self, enhanced_data: pd.DataFrame, report_path: str):
+        """Generate HTML format feature report with detailed explanations for each feature"""
+        data = cast(pd.DataFrame, self.data)
+        original_cols = len(data.columns)
+        new_cols = len(enhanced_data.columns) - original_cols
+
+        # Get generated feature columns
+        generated_features = [col for col in enhanced_data.columns if col not in data.columns]
+
+        def explain_feature(feature_name: str) -> str:
+            """Generate explanation for a specific feature based on its naming pattern"""
+
+            # MagpieData features - ElementProperty featurizer
+            if 'MagpieData' in feature_name:
+                parts = feature_name.replace('MagpieData ', '').split(' ', 1)
+                if len(parts) == 2:
+                    stat, prop = parts
+
+                    # Statistical operation descriptions
+                    stat_desc = {
+                        'minimum': 'the minimum value',
+                        'maximum': 'the maximum value',
+                        'range': 'the range (max - min)',
+                        'mean': 'the weighted average',
+                        'avg_dev': 'the average deviation from mean',
+                        'mode': 'the most common value'
+                    }
+
+                    # Property descriptions
+                    prop_desc = {
+                        'Number': 'atomic number (number of protons in nucleus)',
+                        'MendeleevNumber': 'Mendeleev number (position in periodic table)',
+                        'AtomicWeight': 'atomic weight (average mass of atoms)',
+                        'MeltingT': 'melting temperature (temperature at which solid becomes liquid)',
+                        'Column': 'group number in periodic table (vertical position)',
+                        'Row': 'period number in periodic table (horizontal position)',
+                        'CovalentRadius': 'covalent radius (atomic size in covalent bonds)',
+                        'Electronegativity': 'electronegativity (ability to attract electrons)',
+                        'NsValence': 'number of valence electrons in s orbital',
+                        'NpValence': 'number of valence electrons in p orbital',
+                        'NdValence': 'number of valence electrons in d orbital',
+                        'NfValence': 'number of valence electrons in f orbital',
+                        'NValence': 'total number of valence electrons',
+                        'NsUnfilled': 'number of unfilled electrons in s orbital',
+                        'NpUnfilled': 'number of unfilled electrons in p orbital',
+                        'NdUnfilled': 'number of unfilled electrons in d orbital',
+                        'NfUnfilled': 'number of unfilled electrons in f orbital',
+                        'NUnfilled': 'total number of unfilled electrons',
+                        'GSvolume_pa': 'ground state volume per atom (atomic volume in stable state)',
+                        'GSbandgap': 'ground state band gap (energy gap between valence and conduction bands)',
+                        'GSmagmom': 'ground state magnetic moment (measure of magnetism)',
+                        'SpaceGroupNumber': 'space group number (crystal structure symmetry)'
+                    }
+
+                    stat_text = stat_desc.get(stat, stat)
+                    prop_text = prop_desc.get(prop, prop)
+
+                    return f"Calculates {stat_text} of {prop_text} across all elements in the composition, weighted by stoichiometry."
+
+            # Stoichiometry features
+            if '-norm' in feature_name:
+                norm_num = feature_name.split('-')[0]
+                return f"Computes the {norm_num}-norm of the elemental composition vector. This measures the compositional complexity and element distribution pattern."
+
+            # ValenceOrbital features
+            if 'valence electrons' in feature_name:
+                if feature_name.startswith('avg'):
+                    orbital = feature_name.split()[1]
+                    return f"Average number of valence electrons in {orbital} orbital across all elements in the composition, weighted by stoichiometry."
+                elif feature_name.startswith('frac'):
+                    orbital = feature_name.split()[1]
+                    return f"Fraction of total valence electrons that occupy the {orbital} orbital in the composition."
+
+            # Element amount features
+            # Check if it's a pure element symbol (1-2 characters, starts with uppercase)
+            if len(feature_name) <= 2 and feature_name[0].isupper():
+                return f"Amount of {feature_name} element in the chemical formula (0 if not present)."
+
+            return "Feature generated from the composition."
+
+        # Classify features by type
+        element_property_features = [col for col in generated_features if 'MagpieData' in col]
+        stoichiometry_features = [col for col in generated_features if '-norm' in col]
+        valence_orbital_features = [col for col in generated_features if 'valence electrons' in col]
+        element_amount_features = [col for col in generated_features
+                                   if col not in element_property_features
+                                   and col not in stoichiometry_features
+                                   and col not in valence_orbital_features]
+
+        html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Materials Feature Engineering Report</title>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        body {{
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            color: #333;
+        }}
+        .container {{
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }}
+        .header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }}
+        .header h1 {{
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }}
+        .header p {{
+            font-size: 1.1em;
+            opacity: 0.9;
+        }}
+        .content {{
+            padding: 40px;
+        }}
+        .summary {{
+            background: #f8f9fa;
+            border-left: 5px solid #667eea;
+            padding: 20px;
+            margin-bottom: 30px;
+            border-radius: 5px;
+        }}
+        .summary h2 {{
+            color: #667eea;
+            margin-bottom: 15px;
+        }}
+        .summary-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }}
+        .summary-item {{
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }}
+        .summary-item .label {{
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 5px;
+        }}
+        .summary-item .value {{
+            color: #667eea;
+            font-size: 1.5em;
+            font-weight: bold;
+        }}
+        .section {{
+            margin-bottom: 40px;
+        }}
+        .section h2 {{
+            color: #667eea;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #667eea;
+        }}
+        .featurizer-card {{
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }}
+        .featurizer-card:hover {{
+            transform: translateY(-5px);
+            box-shadow: 0 5px 20px rgba(0,0,0,0.15);
+        }}
+        .featurizer-card h3 {{
+            color: #764ba2;
+            margin-bottom: 15px;
+            font-size: 1.5em;
+        }}
+        .featurizer-card .description {{
+            color: #555;
+            line-height: 1.8;
+            margin-bottom: 20px;
+            font-size: 1.05em;
+        }}
+        .feature-list {{
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 15px;
+        }}
+        .feature-list h4 {{
+            color: #667eea;
+            margin-bottom: 10px;
+        }}
+        .feature-tags {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }}
+        .feature-tag {{
+            background: #667eea;
+            color: white;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            transition: background 0.3s ease;
+        }}
+        .feature-tag:hover {{
+            background: #764ba2;
+        }}
+        .feature-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            background: white;
+            border-radius: 5px;
+            overflow: hidden;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }}
+        .feature-table th {{
+            background: #667eea;
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+        }}
+        .feature-table td {{
+            padding: 10px 12px;
+            border-bottom: 1px solid #e0e0e0;
+        }}
+        .feature-table tr:last-child td {{
+            border-bottom: none;
+        }}
+        .feature-table tr:hover {{
+            background: #f8f9fa;
+        }}
+        .feature-name {{
+            font-family: 'Courier New', monospace;
+            color: #764ba2;
+            font-weight: 600;
+        }}
+        .feature-explanation {{
+            color: #555;
+            line-height: 1.6;
+        }}
+        .footer {{
+            background: #2d3436;
+            color: white;
+            text-align: center;
+            padding: 20px;
+            font-size: 0.9em;
+        }}
+        .footer a {{
+            color: #667eea;
+            text-decoration: none;
+        }}
+        .footer a:hover {{
+            text-decoration: underline;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Materials Feature Engineering Report</h1>
+            <p>Feature Analysis Based on Matminer Library</p>
+        </div>
+
+        <div class="content">
+            <div class="summary">
+                <h2>Data Overview</h2>
+                <div class="summary-grid">
+                    <div class="summary-item">
+                        <div class="label">Original Data Rows</div>
+                        <div class="value">{data.shape[0]}</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="label">Original Columns</div>
+                        <div class="value">{original_cols}</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="label">Enhanced Data Columns</div>
+                        <div class="value">{enhanced_data.shape[1]}</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="label">New Features Added</div>
+                        <div class="value">{new_cols}</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Generated Features and Explanations</h2>
+                <p style="margin-bottom: 20px; color: #555;">
+                    This report lists all {len(generated_features)} features generated from the chemical composition data,
+                    organized by feature type. Each feature name follows a specific naming convention that describes
+                    what property it represents.
+                </p>
+
+                {''.join([f'''<div class="featurizer-card">
+                    <h3>{category_name}</h3>
+                    <p style="margin-bottom: 15px; color: #666;">{category_desc}</p>
+                    <table class="feature-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 40%;">Feature Name</th>
+                                <th style="width: 60%;">Explanation</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {''.join([f'''<tr>
+                                <td class="feature-name">{feat}</td>
+                                <td class="feature-explanation">{explain_feature(feat)}</td>
+                            </tr>''' for feat in features])}
+                        </tbody>
+                    </table>
+                </div>''' for category_name, category_desc, features in [
+                    ('ElementProperty Features (MagpieData)',
+                     f'Statistics of elemental properties weighted by stoichiometry. Total: {len(element_property_features)} features.',
+                     element_property_features),
+                    ('Stoichiometry Features',
+                     f'Compositional complexity metrics using p-norms. Total: {len(stoichiometry_features)} features.',
+                     stoichiometry_features),
+                    ('ValenceOrbital Features',
+                     f'Statistics of valence electron orbital occupancies. Total: {len(valence_orbital_features)} features.',
+                     valence_orbital_features),
+                    ('Element Amount Features',
+                     f'Direct element amounts from composition. Total: {len(element_amount_features)} features.',
+                     element_amount_features)
+                ] if features])}
+            </div>
+
+            <div class="section">
+                <h2>Identified Composition Columns</h2>
+                {''.join([f'''<div class="featurizer-card">
+                    <h3>{col}</h3>
+                    <div class="description">
+                        <p><strong>Category:</strong> {info.get('category', 'unknown')}</p>
+                        <p><strong>Confidence:</strong> {info.get('confidence', 'unknown')}</p>
+                        <p><strong>Description:</strong> {info.get('description', 'N/A')}</p>
+                    </div>
+                </div>''' for col, info in self.identified_columns.items()])}
+            </div>
+
+            <div class="section">
+                <h2>Naming Convention Guide</h2>
+                <div class="featurizer-card">
+                    <h3>Understanding Feature Names</h3>
+                    <div class="description">
+                        <p><strong>MagpieData [statistic] [property]:</strong> Statistical measures (minimum, maximum, range, mean, avg_dev, mode) of elemental properties across the composition.</p>
+                        <p><strong>[N]-norm:</strong> The N-norm of the compositional vector, measuring element distribution complexity.</p>
+                        <p><strong>avg/frac [s/p/d/f] valence electrons:</strong> Average number or fraction of valence electrons in specific orbitals.</p>
+                        <p><strong>[Element Symbol]:</strong> Direct amount of that element in the chemical formula.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>Report Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+            <p>Based on <a href="https://hackingmaterials.lbl.gov/matminer/" target="_blank">Matminer</a> Materials Data Mining Toolkit</p>
+        </div>
+    </div>
+</body>
+</html>"""
+
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+
+        print(f"✓ HTML特征报告已保存到: {report_path}")

@@ -15,6 +15,9 @@ import warnings
 warnings.filterwarnings('ignore')
 from urllib.parse import urlparse
 
+# Import safe data loading function
+from .utils import _load_data_safe
+
 
 class DataExplorer:
     """数据探索和预处理工具"""
@@ -31,23 +34,26 @@ class DataExplorer:
         加载数据并设置任务参数
 
         Args:
-            data_path: 数据文件路径 (支持CSV, Excel等)
+            data_path: 数据文件路径 (支持CSV, Excel, URL等)
             task_type: 任务类型 ("regression" 或 "classification")
             target_dims: 目标变量维度
         """
-        # 根据URL解析的路径判断扩展名；无法判断时尝试CSV/Excel
-        parsed_path = urlparse(data_path).path.lower()
+        # 使用安全加载函数处理URL和本地文件
         try:
+            local_path = _load_data_safe(data_path)
+
+            # 根据文件扩展名判断格式
+            parsed_path = urlparse(local_path).path.lower()
             if parsed_path.endswith('.csv'):
-                self.data = pd.read_csv(data_path)
+                self.data = pd.read_csv(local_path)
             elif parsed_path.endswith(('.xlsx', '.xls')):
-                self.data = pd.read_excel(data_path)
+                self.data = pd.read_excel(local_path)
             else:
                 # 未能从扩展名判断，先尝试CSV，再回退到Excel
                 try:
-                    self.data = pd.read_csv(data_path)
+                    self.data = pd.read_csv(local_path)
                 except Exception:
-                    self.data = pd.read_excel(data_path)
+                    self.data = pd.read_excel(local_path)
         except Exception as e:
             raise ValueError(f"不支持的文件格式或无法解析，建议使用CSV或Excel文件。详细错误: {e}")
 

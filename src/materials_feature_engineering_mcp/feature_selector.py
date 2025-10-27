@@ -21,6 +21,9 @@ import os
 import warnings
 warnings.filterwarnings('ignore')
 
+# Import safe data loading function
+from .utils import _load_data_safe
+
 
 class FeatureSelector:
     """特征选择器类"""
@@ -753,10 +756,14 @@ def select_best_features(
     print(f"任务类型: {task_type}")
     print()
     
-    # 读取数据
+    # 读取数据（支持URL和本地文件）
     print("读取数据...")
-    df = pd.read_csv(data_path)
-    print(f"✓ 数据形状: {df.shape}")
+    try:
+        local_path = _load_data_safe(data_path)
+        df = pd.read_csv(local_path)
+        print(f"✓ 数据形状: {df.shape}")
+    except Exception as e:
+        raise ValueError(f"无法读取数据文件: {str(e)}")
     
     # 检查目标维度
     if target_dims <= 0 or target_dims >= len(df.columns):

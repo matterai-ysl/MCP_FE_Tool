@@ -1,6 +1,6 @@
-MCP_PORT = 8100
-BASE_URL = "http://localhost:8100"
-
+MCP_PORT = 8180
+# BASE_URL = "http://localhost:8180"
+BASE_URL = "https://www.matterai.cn/fe"
 DOWNLOAD_URL = "./data"
 from pathlib import Path
 
