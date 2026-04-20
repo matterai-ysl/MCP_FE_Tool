@@ -66,7 +66,8 @@ class SinglePortMCPServer:
                     "server_info": f"http://{self.host}:{self.port}/api/info",
                     "health_check": f"http://{self.host}:{self.port}/api/health",
                     "model_list": f"http://{self.host}:{self.port}/api/models/list",
-                    "file_download": f"http://{self.host}:{self.port}/api/download/file/{{file_path}}",
+                    "file_download": f"http://{self.host}:{self.port}/download/file/{{path}}",
+                    "static_files": f"http://{self.host}:{self.port}/static/{{path}}",
                     "static_models": f"http://{self.host}:{self.port}/static/models/{{path}}",
                     "static_reports": f"http://{self.host}:{self.port}/static/reports/{{path}}",
                 },
@@ -104,7 +105,7 @@ class SinglePortMCPServer:
                         "name": item.name,
                         "size": item.stat().st_size,
                         "download_url": f"http://{self.host}:{self.port}/api/download/file/{relative_path}",
-                        "static_url": f"http://{self.host}:{self.port}/static/models/{relative_path}"
+                        "static_url": f"http://{self.host}:{self.port}/static/{relative_path}"
                     })
             
             return JSONResponse({"files": files, "count": len(files)})
@@ -166,7 +167,7 @@ class SinglePortMCPServer:
         # 添加静态文件路由
         if self.trained_models_dir.exists():
             routes.append(
-                Mount("/static", StaticFiles(directory=str(self.trained_models_dir)), name="static_models")
+                Mount("/static/models", StaticFiles(directory=str(self.trained_models_dir)), name="static_models_alias")
             )
             # 添加单数形式的路径以支持 /static/model/ 
             routes.append(
@@ -176,6 +177,11 @@ class SinglePortMCPServer:
         if self.reports_dir.exists():
             routes.append(
                 Mount("/static/reports", StaticFiles(directory=str(self.reports_dir)), name="static_reports")
+            )
+
+        if self.trained_models_dir.exists():
+            routes.append(
+                Mount("/static", StaticFiles(directory=str(self.trained_models_dir)), name="static_models")
             )
         
         return routes

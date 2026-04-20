@@ -1,43 +1,27 @@
 # 材料科学机器学习特征工程MCP工具
 
-这是一个专为材料科学领域设计的机器学习特征工程MCP（Model Context Protocol）工具，提供数据探索、分析和预处理功能。
+这是一个专为材料科学领域设计的机器学习特征工程 MCP（Model Context Protocol）工具，当前聚焦“化学表示到特征列”的确定性转换能力。
 
 ## 功能特性
 
-### 🔍 数据探索工具
-- **数据摘要**：基本统计信息、数据类型分析、内存使用情况
-- **缺失值分析**：缺失模式识别、相关性分析、智能处理策略推荐
-- **分布检查**：正态性检验、偏度分析、异常值检测
-- **目标变量分析**：回归和分类任务的专门分析和预处理建议
+### 🔍 数据理解
+- **数据摘要**：返回列名、dtype、缺失率、唯一值数、示例值和预览行
+- **Agent 友好**：给智能体提供足够上下文，自行判断 `composition`、`smiles`、`target`
 
-### 🛠️ 智能预处理
-- 基于数据特征的自动预处理策略选择
-- 缺失值智能填充（均值、中位数、模式、KNN等）
-- 数值特征标准化（Standard、MinMax、Robust Scaler）
-- 分类特征编码建议
+### 🧬 化学特征工程
+- **Composition 特征化**：基于 `matminer` 生成组成式特征
+- **SMILES 特征化**：基于 RDKit 生成确定性的描述符与指纹
+- **数值透传**：支持保留指定数值列拼接进最终特征空间
 
-### 🧬 智能特征生成（新增）
-- **LLM智能列分析**：使用大语言模型自动识别化学组成列
-- **matminer特征生成**：基于化学组成自动生成材料特征
-- **化学计量特征**：元素比例、计量统计等特征
-- **元素属性特征**：原子质量、电负性等物理特征
-- **自动特征工程**：端到端的特征生成和数据增强
+### 🎯 特征选择与复用
+- **训练集选择**：支持基于训练集执行 RFECV 特征选择
+- **长期本地 pipeline**：本地保存可复用 pipeline，并返回 `pipeline_id`
+- **预测集对齐**：测试集 / 预测集按同一 `pipeline_id` 复用并严格对齐列顺序
 
-### 🚀 OpenFE自动特征工程（新增）
-- **高维数据处理**：自动筛选和处理上百维度的特征数据
-- **智能特征组合**：使用OpenFE自动生成有价值的特征组合
-- **两阶段筛选**：基于方差和统计显著性的特征预筛选
-- **任务自适应**：支持回归和分类任务的特征生成
-- **灵活配置**：可自定义筛选强度和生成特征数量
-- **📊 HTML可视化报告**：自动生成精美的HTML报告，包含特征统计和构造详情
-
-### 🎯 RFE-CV特征选择（新增）
-- **自动特征选择**：使用递归特征消除（RFE）+ 交叉验证自动选择最佳特征组合
-- **最优特征数**：自动确定最优的特征数量，无需手动尝试
-- **稳定可靠**：通过交叉验证确保选择结果的稳定性和泛化能力
-- **特征排名**：提供每个特征的重要性排名和贡献度分析
-- **双任务支持**：支持回归和分类任务，自动选择合适的评分指标
-- **📊 可视化报告**：生成包含6个分析图表的完整可视化报告
+### 🚫 当前明确不做
+- 不做归一化、标准化、正则化
+- 不做模型训练与推理
+- 不在 MCP 工具层自动猜列或自动编排流程
 
 ### 📊 材料科学专门优化
 - 适用于原子特征、能量特征、机械特征、结构特征等
@@ -62,192 +46,117 @@ uv sync
 
 ### 1. 作为MCP工具使用
 
-工具提供7个主要的MCP函数：
+工具当前提供两组 MCP 函数：一组处理表格里的 composition / SMILES 字符串，一组处理 `CIF zip + metadata table`。
 
-#### `explore_materials_data`
-完整的数据分析和预处理工具
+#### `summarize_dataset`
+读取数据并返回给智能体判断列语义所需的事实视图。
 ```python
-result = explore_materials_data(
-    data_path="materials_data.csv",
-    task_type="regression",  # 或 "classification"
-    target_dims=1,           # 目标变量维度
-    output_path="processed_data.csv"  # 可选
-)
-```
-
-#### `quick_data_summary`
-快速数据概览
-```python
-summary = quick_data_summary("data.csv")
-```
-
-#### `analyze_missing_values`
-专门的缺失值分析
-```python
-missing_analysis = analyze_missing_values(
-    data_path="data.csv",
-    task_type="regression",
-    target_dims=1
-)
-```
-
-#### `analyze_target_variables`
-目标变量专门分析
-```python
-target_analysis = analyze_target_variables(
-    data_path="data.csv",
-    task_type="classification",
-    target_dims=1
-)
-```
-
-#### `preprocess_data_only`
-仅执行数据预处理
-```python
-result = preprocess_data_only(
-    data_path="input.csv",
-    task_type="regression",
-    target_dims=1,
-    output_path="processed.csv"
-)
-```
-
-#### `analyze_columns_for_feature_generation` （新增）
-使用LLM分析表格列，识别可用于特征生成的列
-```python
-result = analyze_columns_for_feature_generation(
-    data_path="data.csv",
-    llm_model="gpt-3.5-turbo",
-    api_key="your_api_key",  # 可选
-    sample_rows=5
-)
-```
-
-#### `generate_material_features` （新增）
-基于化学组成列生成材料特征
-```python
-result = generate_material_features(
-    data_path="data.csv",
-    composition_column="chemical_formula",
-    feature_types=["element_property", "stoichiometry"],
-    output_path="features.csv"  # 可选
-)
-```
-
-#### `auto_generate_features_with_llm` （新增）
-使用LLM自动分析并生成材料特征
-```python
-result = auto_generate_features_with_llm(
+summary = summarize_dataset(
     data_path="data.csv",
     sample_rows=5,
-    target_dims=1
+    example_values=5,
 )
 ```
 
-#### `auto_feature_engineering_with_openfe` （新增）
-使用OpenFE进行自动化特征工程，适用于高维特征数据
+#### `fit_feature_pipeline`
+在训练集上执行 composition / SMILES 特征化与特征选择，并长期保存本地 pipeline。
 ```python
-result = auto_feature_engineering_with_openfe(
-    data_path="data.csv",
-    target_dims=1,                        # 目标变量维度（默认最后1列）
-    task_type="regression",               # 任务类型：regression 或 classification
-    n_features_before_openfe=50,          # 初步筛选后保留的特征数
-    n_new_features=10,                    # OpenFE生成的新特征数量
-    output_path=None                      # 可选，不提供则自动生成
+result = fit_feature_pipeline(
+    data_path="train.csv",
+    target_column="target",
+    task_type="regression",
+    composition_columns=["composition"],
+    smiles_columns=["smiles"],
+    passthrough_columns=["temperature"],
+    pipeline_config={
+        "featurization": {
+            "composition_feature_types": ["element_amount"],
+            "smiles_feature_types": ["descriptors", "morgan"],
+        },
+        "selection": {"method": "rfecv"},
+    },
 )
+pipeline_id = result["pipeline_id"]
 ```
 
-**使用场景**：
-- 处理上百维度的高维特征数据
-- 需要自动生成有价值的特征组合
-- 传统特征工程效果不佳时的解决方案
-
-**工作流程**：
-1. 自动识别目标变量（默认最后n列）
-2. 基于方差和统计显著性进行初步特征筛选
-3. 使用OpenFE生成新的组合特征
-4. 保存增强后的数据集
-5. **自动生成HTML可视化报告和文本报告**
-
-**生成的报告**：
-- 📊 `*_report.html` - 精美的HTML可视化报告（推荐）
-- 📄 `*_feature_descriptions.txt` - 文本格式详细报告
-- 📈 包含特征统计、构造方式、进度可视化等
-
-#### `select_optimal_features` （新增）
-使用递归特征消除（RFE）结合交叉验证自动选择最佳特征组合
+#### `transform_with_pipeline`
+使用已有 `pipeline_id` 对测试集或预测集执行同一套特征工程。
 ```python
-result = select_optimal_features(
-    data_path="data.csv",
-    target_dims=1,                       # 目标变量维度（最后n列），默认1
-    task_type="regression",              # 任务类型：regression 或 classification
-    cv_folds=5,                          # 交叉验证折数
-    min_features=1,                      # 最少保留的特征数
-    step=1                               # 每次迭代移除的特征数
+result = transform_with_pipeline(
+    pipeline_id=pipeline_id,
+    data_path="predict.csv",
 )
 ```
 
-**核心优势**：
-- ✅ 自动确定最优特征数量
-- ✅ 通过交叉验证确保结果稳定性
-- ✅ 提供特征重要性排名
-- ✅ 支持回归和分类任务
-- ✅ 生成详细的可视化报告
-
-**使用场景**：
-- 从大量特征中筛选关键特征
-- 降低模型复杂度，防止过拟合
-- 提高模型可解释性
-- 减少计算成本
-
-**工作流程**：
-1. 读取数据并分离特征和目标变量
-2. 使用RFE-CV迭代评估特征组合
-3. 自动选择交叉验证评分最高的特征集
-4. 生成可视化报告和详细统计
-5. 保存选中特征的数据集
-
-**生成的输出**：
-- 📊 `*_feature_selection_report.png` - 6个子图的可视化报告
-  - CV评分曲线
-  - 特征重要性排名
-  - 特征排名分布
-  - 选择结果饼图
-  - 评分稳定性分析
-  - 关键指标汇总
-- 📄 `*_feature_selection_details.txt` - 详细文本报告
-  - 选中特征列表（带重要性）
-  - 拒绝特征列表（带排名）
-  - 完整的CV评分历史
-- 💾 `*_selected_features.csv` - 包含选中特征的数据集
-
-**参数调优建议**：
-- `cv_folds`: 小数据集用5-10折，大数据集用3-5折
-- `min_features`: 建议设为原始特征数的10-20%
-- `step`: 小数据集用1-2（精确），大数据集用5-10（快速）
-
-**与其他工具配合**：
+#### `inspect_pipeline`
+查看本地持久化 pipeline 的配置、产物和最终特征列。
 ```python
-# 推荐工作流
-# 1. 数据探索
-explore_data(data_path="raw_data.csv")
-
-# 2. 自动特征工程
-openfe_result = auto_feature_engineering_with_openfe(
-    data_path="raw_data.csv",
-    n_new_features=20
-)
-
-# 3. 特征选择 ⭐
-selection_result = select_optimal_features(
-    data_path=openfe_result['output_file'],  # 使用OpenFE的输出
-    target_dims=1,                       # 目标在最后1列
-    task_type="regression"
-)
-# 得到优化后的高质量特征集！
+pipeline_info = inspect_pipeline(pipeline_id)
 ```
 
-**详细使用指南**：参见 `FEATURE_SELECTION_GUIDE.md`
+#### `list_pipelines`
+列出本地已有的长期保存 pipeline。
+```python
+pipelines = list_pipelines()
+```
+
+**推荐工作流**：
+1. 先用 `summarize_dataset` 让智能体识别 `composition` / `smiles` / `target`
+2. 用 `fit_feature_pipeline` 在训练集上生成并保存 `pipeline_id`
+3. 用 `transform_with_pipeline` 处理测试集或预测集
+4. 需要回看历史配置时用 `inspect_pipeline` / `list_pipelines`
+
+**持久化目录**：
+- `data/pipelines/<pipeline_id>/metadata.json`
+- `data/pipelines/<pipeline_id>/training_features.csv`
+- `data/pipelines/<pipeline_id>/transforms/*.csv`
+
+**说明**：
+- 旧的“数据探索 / 自动预处理 / OpenFE MCP 工具”不再作为对外 MCP 接口暴露
+- 底层类仍保留在代码库中，供新的 pipeline runner 复用
+
+### CIF 专用工具组
+
+当前还提供独立的 CIF pipeline 工具：
+
+- `summarize_cif_archive`
+- `fit_cif_pipeline`
+- `transform_with_cif_pipeline`
+- `inspect_cif_pipeline`
+- `list_cif_pipelines`
+
+训练输入是 `zip + metadata table`。`zip` 内放 `.cif` 文件，metadata 表用 `cif_filename` 列和文件名精确对齐。
+
+```python
+result = fit_cif_pipeline(
+    structure_archive="structures.zip",
+    metadata_table="labels.csv",
+    cif_filename_column="cif_filename",
+    target_column="band_gap",
+    task_type="regression",
+    pipeline_config={
+        "featurization": {
+            "structure_feature_types": ["basic", "symmetry", "density", "complexity"],
+            "composition_feature_types": ["element_amount"],
+        },
+        "selection": {"method": "rfecv"},
+    },
+)
+pipeline_id = result["pipeline_id"]
+
+predict_result = transform_with_cif_pipeline(
+    pipeline_id=pipeline_id,
+    structure_archive="predict_structures.zip",
+    metadata_table="predict_metadata.csv",
+    cif_filename_column="cif_filename",
+)
+```
+
+CIF pipeline 会长期保存到：
+
+- `data/cif_pipelines/<pipeline_id>/metadata.json`
+- `data/cif_pipelines/<pipeline_id>/training_features.csv`
+- `data/cif_pipelines/<pipeline_id>/transforms/*.csv`
 
 ### 2. 直接使用DataExplorer类
 

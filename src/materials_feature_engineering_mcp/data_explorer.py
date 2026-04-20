@@ -16,7 +16,7 @@ warnings.filterwarnings('ignore')
 from urllib.parse import urlparse
 
 # Import safe data loading function
-from .utils import _load_data_safe
+from .utils import _load_data_safe, _validate_target_dims
 
 
 class DataExplorer:
@@ -58,10 +58,10 @@ class DataExplorer:
             raise ValueError(f"不支持的文件格式或无法解析，建议使用CSV或Excel文件。详细错误: {e}")
 
         self.task_type = task_type.lower()
+        _validate_target_dims(len(self.data.columns), target_dims)
         self.target_dims = target_dims
 
         # 确定目标列和特征列
-        total_cols = len(self.data.columns)
         self.target_columns = self.data.columns[-target_dims:].tolist()
         self.feature_columns = self.data.columns[:-target_dims].tolist()
 
@@ -226,10 +226,29 @@ class DataExplorer:
     def _test_distributions(self, data: pd.Series) -> Dict[str, Any]:
         """测试数据分布"""
         results = {}
+        sample_size = len(data)
+
+        if sample_size < 3:
+            results["正态性检验"] = {
+                "状态": "skipped",
+                "原因": "样本数少于3，无法执行 Shapiro-Wilk 检验",
+                "样本数": sample_size
+            }
+            return results
+
+        if data.nunique() <= 1:
+            results["正态性检验"] = {
+                "状态": "skipped",
+                "原因": "样本值恒定，无法执行分布检验",
+                "样本数": sample_size
+            }
+            return results
 
         # 正态性检验
-        _, p_shapiro = stats.shapiro(data.sample(min(5000, len(data))))
+        sample = data.sample(min(5000, sample_size), random_state=42) if sample_size > 5000 else data
+        _, p_shapiro = stats.shapiro(sample)
         results["正态性检验"] = {
+            "状态": "completed",
             "Shapiro-Wilk p值": p_shapiro,
             "是否正态": p_shapiro > 0.05
         }
@@ -237,16 +256,27 @@ class DataExplorer:
         # 对数正态性检验
         if (data > 0).all():
             log_data = np.log(data)
-            _, p_log_shapiro = stats.shapiro(log_data.sample(min(5000, len(log_data))))
-            results["对数正态性检验"] = {
-                "p值": p_log_shapiro,
-                "是否对数正态": p_log_shapiro > 0.05
-            }
+            if len(log_data) >= 3 and log_data.nunique() > 1:
+                log_sample = log_data.sample(min(5000, len(log_data)), random_state=42) if len(log_data) > 5000 else log_data
+                _, p_log_shapiro = stats.shapiro(log_sample)
+                results["对数正态性检验"] = {
+                    "状态": "completed",
+                    "p值": p_log_shapiro,
+                    "是否对数正态": p_log_shapiro > 0.05
+                }
+            else:
+                results["对数正态性检验"] = {
+                    "状态": "skipped",
+                    "原因": "对数变换后的样本不足或值恒定，跳过检验"
+                }
 
         return results
 
     def _detect_outliers(self, data: pd.Series) -> Dict[str, Any]:
         """检测异常值"""
+        if data.empty:
+            return {"状态": "skipped", "原因": "无有效样本，跳过异常值检测"}
+
         Q1 = data.quantile(0.25)
         Q3 = data.quantile(0.75)
         IQR = Q3 - Q1

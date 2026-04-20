@@ -4,11 +4,19 @@ Common helper functions for data loading, validation, etc.
 """
 
 import os
+import re
 import uuid
 import tempfile
 import time
+from pathlib import Path
 from urllib.parse import urlparse
 from typing import Optional
+
+import pandas as pd
+
+
+DATA_DIR = Path("data")
+_SAFE_USER_ID_PATTERN = re.compile(r"[^A-Za-z0-9_-]+")
 
 
 def _is_url(path: str) -> bool:
@@ -26,6 +34,63 @@ def _validate_data_path(data_path: str) -> None:
         return
     if not os.path.exists(data_path):
         raise FileNotFoundError(f"Data file does not exist: {data_path}")
+
+
+def _read_tabular_data(data_path: str) -> pd.DataFrame:
+    """Read CSV or Excel data from a local path or URL into a DataFrame."""
+    local_path = _load_data_safe(data_path)
+    parsed_path = urlparse(local_path).path.lower()
+
+    if parsed_path.endswith(".csv"):
+        return pd.read_csv(local_path)
+    if parsed_path.endswith((".xlsx", ".xls")):
+        return pd.read_excel(local_path)
+
+    try:
+        return pd.read_csv(local_path)
+    except Exception:
+        return pd.read_excel(local_path)
+
+
+def _sanitize_user_id(user_id: Optional[str]) -> str:
+    """Normalize user identifiers so they are safe for filesystem paths."""
+    if not user_id or not user_id.strip():
+        return "default"
+
+    cleaned = _SAFE_USER_ID_PATTERN.sub("_", user_id.strip()).strip("._-")
+    return cleaned or "default"
+
+
+def _resolve_path_within_data_dir(path: str | Path) -> Path:
+    """Resolve a path and ensure it stays inside the managed data directory."""
+    data_root = DATA_DIR.resolve()
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = (Path.cwd() / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+
+    if candidate != data_root and data_root not in candidate.parents:
+        raise ValueError(f"Path escapes data directory: {candidate}")
+
+    return candidate
+
+
+def _relative_path_within_data_dir(path: str | Path) -> Path:
+    """Return a relative path rooted at the managed data directory."""
+    return _resolve_path_within_data_dir(path).relative_to(DATA_DIR.resolve())
+
+
+def _validate_target_dims(total_columns: int, target_dims: int) -> None:
+    """Validate that at least one feature column remains after splitting targets."""
+    if target_dims <= 0:
+        raise ValueError("target_dims must be a positive integer")
+    if total_columns <= 1:
+        raise ValueError("Dataset must contain at least one feature column and one target column")
+    if target_dims >= total_columns:
+        raise ValueError(
+            f"target_dims must be between 1 and {total_columns - 1}, current value: {target_dims}"
+        )
 
 
 def _download_file_from_url(url: str, max_retries: int = 3, timeout: int = 30) -> str:
@@ -121,41 +186,30 @@ def _try_convert_url_to_local_path(url: str) -> Optional[str]:
         from urllib.parse import urlparse, unquote
         parsed = urlparse(url)
 
-        # Check if it matches the download URL pattern
-        # Pattern: /download/file/{user_id}/{uuid}/{filename}
-        path_parts = parsed.path.strip('/').split('/')
+        path_parts = [unquote(part) for part in parsed.path.strip("/").split("/") if part]
+        relative_parts: list[str] = []
 
-        if len(path_parts) >= 4 and path_parts[0] == 'download' and path_parts[1] == 'file':
-            user_id = path_parts[2]
-            uuid_dir = path_parts[3]
-            filename = '/'.join(path_parts[4:]) if len(path_parts) > 4 else ''
+        if len(path_parts) >= 3 and path_parts[0] == "download" and path_parts[1] == "file":
+            relative_parts = path_parts[2:]
+        elif len(path_parts) >= 2 and path_parts[0] == "static":
+            if path_parts[1] in {"models", "model", "reports", "file"}:
+                relative_parts = path_parts[2:]
+            else:
+                relative_parts = path_parts[1:]
 
-            # Decode URL-encoded characters
-            filename = unquote(filename)
+        if relative_parts:
+            local_path = DATA_DIR.joinpath(*relative_parts)
+            try:
+                resolved_path = _resolve_path_within_data_dir(local_path)
+            except ValueError:
+                return None
 
-            # Construct potential local path: ./data/{user_id}/{uuid}/{filename}
-            local_path = os.path.join('data', user_id, uuid_dir, filename)
+            if resolved_path.exists():
+                print(f"✓ Found local file: {resolved_path}")
+                print("  Skipping HTTP download from URL")
+                return str(resolved_path)
 
-            if os.path.exists(local_path):
-                print(f"✓ Found local file: {local_path}")
-                print(f"  Skipping HTTP download from URL")
-                return local_path
-
-        # Also check static file pattern: /static/file/{user_id}/{uuid}/{filename}
-        if len(path_parts) >= 4 and path_parts[0] == 'static' and path_parts[1] == 'file':
-            user_id = path_parts[2]
-            uuid_dir = path_parts[3]
-            filename = '/'.join(path_parts[4:]) if len(path_parts) > 4 else ''
-
-            filename = unquote(filename)
-            local_path = os.path.join('data', user_id, uuid_dir, filename)
-
-            if os.path.exists(local_path):
-                print(f"✓ Found local file: {local_path}")
-                print(f"  Skipping HTTP download from URL")
-                return local_path
-
-    except Exception as e:
+    except Exception:
         # If parsing fails, just return None and fall back to HTTP download
         pass
 

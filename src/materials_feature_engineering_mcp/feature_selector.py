@@ -92,6 +92,10 @@ class FeatureSelector:
         )
         
         rfecv.fit(X_scaled, y)
+        feature_counts = self._build_feature_count_sequence(X.shape[1])
+        if len(feature_counts) != len(rfecv.cv_results_['mean_test_score']):
+            feature_counts = list(range(1, len(rfecv.cv_results_['mean_test_score']) + 1))
+        best_score_index = feature_counts.index(rfecv.n_features_)
         
         # 获取选择的特征
         selected_features = X.columns[rfecv.support_].tolist()
@@ -101,7 +105,7 @@ class FeatureSelector:
         print(f"  最优特征数: {rfecv.n_features_}")
         print(f"  选择的特征数: {len(selected_features)}")
         print(f"  拒绝的特征数: {len(rejected_features)}")
-        print(f"  最佳CV评分: {rfecv.cv_results_['mean_test_score'][rfecv.n_features_ - self.min_features]:.4f}")
+        print(f"  最佳CV评分: {rfecv.cv_results_['mean_test_score'][best_score_index]:.4f}")
         
         # 计算特征重要性（使用最终模型）
         feature_importances: Dict[str, float] = {}
@@ -116,10 +120,11 @@ class FeatureSelector:
             'rejected_features': rejected_features,
             'n_features': rfecv.n_features_,
             'ranking': dict(zip(X.columns, rfecv.ranking_)),
+            'feature_counts': feature_counts,
             'cv_scores': rfecv.cv_results_['mean_test_score'],
             'cv_scores_std': rfecv.cv_results_['std_test_score'],
             'feature_importances': feature_importances,
-            'best_score': rfecv.cv_results_['mean_test_score'][rfecv.n_features_ - self.min_features],
+            'best_score': rfecv.cv_results_['mean_test_score'][best_score_index],
             'rfecv_object': rfecv,
             'scaler': scaler
         }
@@ -146,7 +151,7 @@ class FeatureSelector:
         
         # 1. CV Score Curve
         ax1 = plt.subplot(2, 3, 1)
-        n_features_range = range(self.min_features, len(X.columns) + 1, self.step)
+        n_features_range = result.get('feature_counts', self._build_feature_count_sequence(len(X.columns)))
         scores = result['cv_scores']
         scores_std = result['cv_scores_std']
         
@@ -197,12 +202,6 @@ class FeatureSelector:
         
         # 5. CV Score Stability
         ax5 = plt.subplot(2, 3, 5)
-        # Select key feature count points
-        key_points = [self.min_features, 
-                     result['n_features'], 
-                     len(X.columns)]
-        key_points = sorted(list(set(key_points)))
-        
         ax5.errorbar(range(len(scores)), scores, yerr=scores_std, 
                     fmt='o-', capsize=5, capthick=2, linewidth=2)
         ax5.axhline(result['best_score'], color='g', linestyle='--', 
@@ -622,6 +621,20 @@ class FeatureSelector:
         
         print(f"✓ HTML report saved: {html_path}")
         return html_path
+
+    def _build_feature_count_sequence(self, total_features: int) -> List[int]:
+        if total_features <= self.min_features:
+            return [total_features]
+
+        remainder = (total_features - self.min_features) % self.step
+        counts = [self.min_features]
+        next_count = self.min_features + (remainder if remainder else self.step)
+
+        while next_count <= total_features:
+            counts.append(next_count)
+            next_count += self.step
+
+        return counts
     
     def save_results(self, result: Dict[str, Any], X: pd.DataFrame, y: pd.Series,
                     output_path: str, target_cols: List[str] | None = None, df_original: pd.DataFrame | None = None) -> Tuple[str, str, str, str]:
@@ -707,8 +720,8 @@ class FeatureSelector:
             f.write(f"{'Features':>10s}  {'Mean Score':>12s}  {'Std Dev':>12s}\n")
             f.write("-" * 80 + "\n")
             
-            for i, (score, std) in enumerate(zip(result['cv_scores'], result['cv_scores_std'])):
-                n_feat = self.min_features + i * self.step
+            feature_counts = result.get('feature_counts', self._build_feature_count_sequence(len(X.columns)))
+            for n_feat, score, std in zip(feature_counts, result['cv_scores'], result['cv_scores_std']):
                 marker = " <- Optimal" if n_feat == result['n_features'] else ""
                 f.write(f"{n_feat:>10d}  {score:>12.6f}  {std:>12.6f}{marker}\n")
             
@@ -880,4 +893,3 @@ def select_best_features(
         'task_type': str(task_type),
         'cv_folds': int(cv_folds)
     }
-

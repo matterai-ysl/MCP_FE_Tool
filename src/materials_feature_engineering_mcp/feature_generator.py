@@ -10,6 +10,7 @@ import warnings
 import json
 import os
 import re
+from html import escape
 from urllib.parse import urlparse
 # LLM相关导入
 
@@ -41,8 +42,8 @@ class MaterialsFeatureGenerator:
             api_key: API密钥（如果不提供，将从环境变量获取）
         """
         self.llm_model = llm_model
-        self.api_key = os.getenv("OPENAI_API_KEY")
-        self.api_base = os.getenv("BASE_URL")
+        self.api_key = api_key if api_key is not None else os.getenv("OPENAI_API_KEY")
+        self.api_base = api_base if api_base is not None else os.getenv("BASE_URL")
         self.data = None
         self.identified_columns = {}
 
@@ -151,9 +152,23 @@ class MaterialsFeatureGenerator:
         if composition_column not in data.columns:
             raise ValueError(f"列 '{composition_column}' 不存在")
 
-        # 直接使用 matminer 流水线
+        selected_feature_types = set(feature_types or [
+            "element_property",
+            "stoichiometry",
+            "valence_orbital",
+            "element_amount",
+        ])
+        supported_feature_types = {
+            "element_property",
+            "stoichiometry",
+            "valence_orbital",
+            "element_amount",
+        }
+        unsupported_feature_types = sorted(selected_feature_types - supported_feature_types)
+        if unsupported_feature_types:
+            raise ValueError(f"不支持的特征类型: {unsupported_feature_types}")
+
         df = data.copy()
-        original_cols = list(df.columns)
 
         def to_composition(x: Any):
             try:
@@ -164,33 +179,71 @@ class MaterialsFeatureGenerator:
 
         df["composition"] = df[composition_column].apply(to_composition)
 
-        ep = ElementProperty.from_preset("magpie")
-        df = cast(pd.DataFrame, ep.featurize_dataframe(df, col_id="composition"))
+        generated_frames: List[pd.DataFrame] = []
 
-        st = Stoichiometry()
-        df = cast(pd.DataFrame, st.featurize_dataframe(df, "composition"))
+        if "element_property" in selected_feature_types:
+            before_cols = set(df.columns)
+            ep = ElementProperty.from_preset("magpie")
+            ep.set_n_jobs(1)
+            df = cast(pd.DataFrame, ep.featurize_dataframe(
+                df,
+                col_id="composition",
+                ignore_errors=True,
+                pbar=False,
+            ))
+            new_cols = [col for col in df.columns if col not in before_cols and col != "composition"]
+            generated_frames.append(cast(pd.DataFrame, df[new_cols].copy()))
 
-        vo = ValenceOrbital()
-        df = cast(pd.DataFrame, vo.featurize_dataframe(df, "composition"))
+        if "stoichiometry" in selected_feature_types:
+            before_cols = set(df.columns)
+            st = Stoichiometry()
+            st.set_n_jobs(1)
+            df = cast(pd.DataFrame, st.featurize_dataframe(
+                df,
+                "composition",
+                ignore_errors=True,
+                pbar=False,
+            ))
+            new_cols = [col for col in df.columns if col not in before_cols and col != "composition"]
+            generated_frames.append(cast(pd.DataFrame, df[new_cols].copy()))
+
+        if "valence_orbital" in selected_feature_types:
+            before_cols = set(df.columns)
+            vo = ValenceOrbital()
+            vo.set_n_jobs(1)
+            df = cast(pd.DataFrame, vo.featurize_dataframe(
+                df,
+                "composition",
+                ignore_errors=True,
+                pbar=False,
+            ))
+            new_cols = [col for col in df.columns if col not in before_cols and col != "composition"]
+            generated_frames.append(cast(pd.DataFrame, df[new_cols].copy()))
 
         # 基于 Composition 展开元素含量列
-        el_amount_dicts: List[Dict[str, float]] = []
-        for comp in df["composition"].tolist():
-            if isinstance(comp, Composition):
-                try:
-                    el_amount_dicts.append(cast(Dict[str, float], comp.get_el_amt_dict()))
-                except Exception:
+        if "element_amount" in selected_feature_types:
+            el_amount_dicts: List[Dict[str, float]] = []
+            for comp in df["composition"].tolist():
+                if isinstance(comp, Composition):
+                    try:
+                        el_amount_dicts.append(cast(Dict[str, float], comp.get_el_amt_dict()))
+                    except Exception:
+                        el_amount_dicts.append({})
+                else:
                     el_amount_dicts.append({})
-            else:
-                el_amount_dicts.append({})
 
-        all_elements: List[str] = sorted(list({el for d in el_amount_dicts for el in d.keys()}))
-        elements_df = pd.DataFrame({el: [d.get(el, 0.0) for d in el_amount_dicts] for el in all_elements}, index=df.index)
+            all_elements: List[str] = sorted(list({el for d in el_amount_dicts for el in d.keys()}))
+            elements_df = pd.DataFrame(
+                {el: [d.get(el, 0.0) for d in el_amount_dicts] for el in all_elements},
+                index=df.index
+            )
+            generated_frames.append(elements_df)
 
-        new_feature_cols = [c for c in df.columns if c not in original_cols and c != "composition"]
-        features_df = cast(pd.DataFrame, df[new_feature_cols].copy())
-        # 合并元素含量列
-        features_df = cast(pd.DataFrame, pd.concat([features_df, elements_df], axis=1))
+        features_df = (
+            cast(pd.DataFrame, pd.concat(generated_frames, axis=1))
+            if generated_frames
+            else pd.DataFrame(index=df.index)
+        )
         print(f"成功生成 {len(features_df.columns)} 个组成特征")
         return features_df
 
@@ -215,7 +268,7 @@ class MaterialsFeatureGenerator:
             if col not in data.columns:
                 print(f"警告: 列 '{col}' 不存在，跳过")
                 continue
-            comp_features = self.generate_composition_features(col)
+            comp_features = self.generate_composition_features(col, feature_types=selected_columns[col])
             all_features = cast(pd.DataFrame, pd.concat([all_features, comp_features], axis=1))
             print(f"为列 '{col}' 生成了 {len(comp_features.columns)} 个特征")
 
@@ -372,6 +425,78 @@ class MaterialsFeatureGenerator:
                                    if col not in element_property_features
                                    and col not in stoichiometry_features
                                    and col not in valence_orbital_features]
+
+        category_sections = [
+            (
+                "ElementProperty Features (MagpieData)",
+                f"Statistics of elemental properties weighted by stoichiometry. Total: {len(element_property_features)} features.",
+                element_property_features,
+            ),
+            (
+                "Stoichiometry Features",
+                f"Compositional complexity metrics using p-norms. Total: {len(stoichiometry_features)} features.",
+                stoichiometry_features,
+            ),
+            (
+                "ValenceOrbital Features",
+                f"Statistics of valence electron orbital occupancies. Total: {len(valence_orbital_features)} features.",
+                valence_orbital_features,
+            ),
+            (
+                "Element Amount Features",
+                f"Direct element amounts from composition. Total: {len(element_amount_features)} features.",
+                element_amount_features,
+            ),
+        ]
+
+        def render_feature_rows(features: List[str]) -> str:
+            rows = []
+            for feat in features:
+                rows.append(
+                    "<tr>"
+                    f'<td class="feature-name">{escape(feat)}</td>'
+                    f'<td class="feature-explanation">{escape(explain_feature(feat))}</td>'
+                    "</tr>"
+                )
+            return "".join(rows)
+
+        def render_feature_sections() -> str:
+            sections = []
+            for category_name, category_desc, features in category_sections:
+                if not features:
+                    continue
+                sections.append(
+                    "<div class=\"featurizer-card\">"
+                    f"<h3>{escape(category_name)}</h3>"
+                    f"<p style=\"margin-bottom: 15px; color: #666;\">{escape(category_desc)}</p>"
+                    "<table class=\"feature-table\">"
+                    "<thead><tr>"
+                    "<th style=\"width: 40%;\">Feature Name</th>"
+                    "<th style=\"width: 60%;\">Explanation</th>"
+                    "</tr></thead>"
+                    f"<tbody>{render_feature_rows(features)}</tbody>"
+                    "</table>"
+                    "</div>"
+                )
+            return "".join(sections)
+
+        def render_identified_columns() -> str:
+            sections = []
+            for col, info in self.identified_columns.items():
+                sections.append(
+                    "<div class=\"featurizer-card\">"
+                    f"<h3>{escape(str(col))}</h3>"
+                    "<div class=\"description\">"
+                    f"<p><strong>Category:</strong> {escape(str(info.get('category', 'unknown')))}</p>"
+                    f"<p><strong>Confidence:</strong> {escape(str(info.get('confidence', 'unknown')))}</p>"
+                    f"<p><strong>Description:</strong> {escape(str(info.get('description', 'N/A')))}</p>"
+                    "</div>"
+                    "</div>"
+                )
+            return "".join(sections)
+
+        feature_sections_html = render_feature_sections()
+        identified_columns_html = render_identified_columns()
 
         html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -596,50 +721,12 @@ class MaterialsFeatureGenerator:
                     organized by feature type. Each feature name follows a specific naming convention that describes
                     what property it represents.
                 </p>
-
-                {''.join([f'''<div class="featurizer-card">
-                    <h3>{category_name}</h3>
-                    <p style="margin-bottom: 15px; color: #666;">{category_desc}</p>
-                    <table class="feature-table">
-                        <thead>
-                            <tr>
-                                <th style="width: 40%;">Feature Name</th>
-                                <th style="width: 60%;">Explanation</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {''.join([f'''<tr>
-                                <td class="feature-name">{feat}</td>
-                                <td class="feature-explanation">{explain_feature(feat)}</td>
-                            </tr>''' for feat in features])}
-                        </tbody>
-                    </table>
-                </div>''' for category_name, category_desc, features in [
-                    ('ElementProperty Features (MagpieData)',
-                     f'Statistics of elemental properties weighted by stoichiometry. Total: {len(element_property_features)} features.',
-                     element_property_features),
-                    ('Stoichiometry Features',
-                     f'Compositional complexity metrics using p-norms. Total: {len(stoichiometry_features)} features.',
-                     stoichiometry_features),
-                    ('ValenceOrbital Features',
-                     f'Statistics of valence electron orbital occupancies. Total: {len(valence_orbital_features)} features.',
-                     valence_orbital_features),
-                    ('Element Amount Features',
-                     f'Direct element amounts from composition. Total: {len(element_amount_features)} features.',
-                     element_amount_features)
-                ] if features])}
+                {feature_sections_html}
             </div>
 
             <div class="section">
                 <h2>Identified Composition Columns</h2>
-                {''.join([f'''<div class="featurizer-card">
-                    <h3>{col}</h3>
-                    <div class="description">
-                        <p><strong>Category:</strong> {info.get('category', 'unknown')}</p>
-                        <p><strong>Confidence:</strong> {info.get('confidence', 'unknown')}</p>
-                        <p><strong>Description:</strong> {info.get('description', 'N/A')}</p>
-                    </div>
-                </div>''' for col, info in self.identified_columns.items()])}
+                {identified_columns_html}
             </div>
 
             <div class="section">

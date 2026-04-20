@@ -1,12 +1,22 @@
 MCP_PORT = 8180
 # BASE_URL = "http://localhost:8180"
 BASE_URL = "https://www.matterai.cn/fe"
-DOWNLOAD_URL = "./data"
 from pathlib import Path
 
+from .utils import _relative_path_within_data_dir
 
-def get_download_url(path:str):
-    return f"{BASE_URL}/download/file/{Path(path).relative_to(DOWNLOAD_URL).as_posix()}"
+DATA_ROOT = Path("data")
+DOWNLOAD_PREFIX = "/download/file"
+STATIC_PREFIX = "/static"
 
-def get_static_url(path:str):
-    return f"{BASE_URL}/static/{Path(path).relative_to(DOWNLOAD_URL).as_posix()}"
+
+def _relative_url_path(path: str) -> str:
+    return _relative_path_within_data_dir(path).as_posix()
+
+
+def get_download_url(path: str):
+    return f"{BASE_URL}{DOWNLOAD_PREFIX}/{_relative_url_path(path)}"
+
+
+def get_static_url(path: str):
+    return f"{BASE_URL}{STATIC_PREFIX}/{_relative_url_path(path)}"
