@@ -8,7 +8,7 @@
 3. 静态文件服务
 4. API端点
 
-所有服务都运行在单个端口（默认8100）上。
+所有服务都运行在单个端口（默认8180）上。
 """
 
 import logging
@@ -249,7 +249,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用示例:
-  %(prog)s                           # 默认配置（localhost:8090）
+  %(prog)s                           # 默认配置（localhost:8180）
   %(prog)s --host 0.0.0.0            # 绑定所有接口
   %(prog)s --port 9000               # 自定义端口
   %(prog)s --host 0.0.0.0 --port 9000 # 自定义主机和端口
@@ -276,7 +276,7 @@ def main():
         "--port",
         type=int,
         default=MCP_PORT,
-        help="端口号（默认: 8100）"
+        help="端口号（默认: 8180）"
     )
     
     parser.add_argument(
